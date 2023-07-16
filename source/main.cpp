@@ -6,6 +6,10 @@
 
 #include <iostream>
 #include <fstream>
+#include <time.h>
+#include <chrono>
+
+#include <thread>
 
 #include "task.h"
 
@@ -15,7 +19,7 @@ int main(int* argv, char** argc)
 	std::vector<int> result;
 
 	int count = 0;
-
+	
 	// input
 	std::ifstream in("input.txt");
 	if (in.is_open())
@@ -34,7 +38,7 @@ int main(int* argv, char** argc)
 
 	// invoke
 	Task::checkVisible(units, result);
-
+	
 	// output
 	std::ofstream out;
 	out.open("output.txt");

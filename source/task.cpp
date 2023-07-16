@@ -4,99 +4,140 @@
 #include <cmath>
 #include <thread>
 #include <functional>
+#include <chrono>
+#include <mutex>
 
 #define PI 3.141592653f
 
-void Task::checkVisible(const std::vector<unit>& input_units, std::vector<int>& result)
-{
-	//проверка на вхождение в возможную область видимости с погрешностью
-	bool (*check_distance_with_err)(const vec2&, const vec2&, const float&) =
-		[](const vec2& p1, const vec2& p2, const float& sight_dist)
-	{
-		return std::pow(p1.x - p2.x, 2) + std::pow(p1.y - p2.y, 2) <= std::pow(sight_dist, 2) + 0.000000001f;
-	};
-	//проверка на вхождение в возможную область видимости без погрешности
-	bool (*check_distance)(const vec2&, const vec2&, const float&) =
-		[](const vec2& p1, const vec2& p2, const float& sight_dist)
-	{
-		return std::pow(p1.x - p2.x, 2) + std::pow(p1.y - p2.y, 2) <= std::pow(sight_dist, 2);
-	};
+std::mutex mutex;
 
-	//векторное произведение
-	void (*vm)(const vec2&, const vec2&, const vec2&, float&) =
-		[](const vec2& start, const vec2& sight_vec, const vec2& point, float& ans)
-	{
-		ans = sight_vec.x * (point.y - start.y) - (point.x - start.y) * sight_vec.y;
-	};
-
-	//поворот вектора 
-	/*
+//скалярное произведение
+void scalarMultiply(const vec2& start, const vec2& sight_vec, const vec2& point, float& ans);
+//векторное произведение
+void vectorMultiply(const vec2& start, const vec2& sight_vec, const vec2& point, float& ans);
+//проверка на вхождение в возможную область видимости
+bool checkDistance(const vec2& p1, const vec2& p2, const float& sight_dist);
+/*
 	x1 = x * cosA - y * sinA
 	y1 = x * sinA + y * cosA
 
 	координаты направляющего вектора после поворота
-	*/
-	void (*rotate)(const vec2&, vec2&, const float&) =
-		[](const vec2& input_vect, vec2& output_vect, const float& angle)
-	{
-		output_vect.x = input_vect.x * std::cos(angle * PI / 180.f) - input_vect.y * std::sin(angle * PI / 180.f);
-		output_vect.y = input_vect.x * std::sin(angle * PI / 180.f) + input_vect.y * std::cos(angle * PI / 180.f);
-	};
+*/
+void rotateVector(const vec2& input_vect, vec2& output_vect, const float& angle);
 
-	//проверка на равенство с погрешностью
-	bool (*nearly_equal)(const float&, const float&, const float&) =
-		[](const float& f1, const float& f2, const float& error_rate)
+void checkVisiblePart(const std::vector<unit>& input_units,
+	std::vector<int>& result, const unsigned int& start, const unsigned int& end, const unsigned int& size);
+void createThread(const std::vector<unit>& input_units,
+	std::vector<int>& result, const unsigned int& start, const unsigned int& step, const unsigned int& size)
+{
+	std::thread thr; 
+	if (start + step < size)
 	{
-		return f1 + error_rate >= f2 && f1 - error_rate <= f2;
-	};
-
-	std::size_t input_size = input_units.size();
+		thr = std::thread(checkVisiblePart, std::ref(input_units), std::ref(result), start, start + step, size);
+		createThread(input_units, result, start + step, step, size);
+	}
+	else
+	{
+		thr = std::thread(checkVisiblePart, std::ref(input_units), std::ref(result), start, size, size);
+	}
+	thr.join();
+}
+void Task::checkVisible(const std::vector<unit>& input_units, std::vector<int>& result)
+{
+	unsigned int input_size = input_units.size();
 	// fill vector result
-	result.reserve(input_size);
-	//Для начала будет проверка на вхождение в область видимости
-	for (std::size_t i = 0; i < input_size; i++)
+	result.resize(input_size);
+
+	unsigned int thread_count = std::thread::hardware_concurrency();
+	unsigned int count_to_thread;
+	if (input_size / thread_count)
 	{
-		vec2 current_position = input_units[i].position;
-		vec2 direction = input_units[i].direction;
-		vec2 sight_vec1, sight_vec2;
-		float angle = input_units[i].fov_deg / 2.f;
+		count_to_thread = input_size / thread_count;
+	}
+	else
+	{
+		count_to_thread = input_size;
+	}
 
-		//поворачиваем на половину угла обзора 
+	createThread(input_units, result, 0, 1, input_size);
+}
+
+
+void scalarMultiply(const vec2& start, const vec2& sight_vec, const vec2& point, float& ans)
+{
+	ans = sight_vec.x * (point.x - start.x) + (point.y - start.y) * sight_vec.y;
+};
+void vectorMultiply(const vec2& start, const vec2& sight_vec, const vec2& point, float& ans)
+{
+	ans = sight_vec.x * (point.y - start.y) - (point.x - start.x) * sight_vec.y;
+}
+bool checkDistance(const vec2& p1, const vec2& p2, const float& sight_dist)
+{
+	return std::pow(p1.x - p2.x, 2) + std::pow(p1.y - p2.y, 2) <= std::pow(sight_dist, 2);
+}
+void rotateVector(const vec2& input_vect, vec2& output_vect, const float& angle)
+{
+	output_vect.x = input_vect.x * std::cos(angle * PI / 180.f) - input_vect.y * std::sin(angle * PI / 180.f);
+	output_vect.y = input_vect.x * std::sin(angle * PI / 180.f) + input_vect.y * std::cos(angle * PI / 180.f);
+}
+void checkVisiblePart(const std::vector<unit>& input_units, std::vector<int>& result, const unsigned int& start, const unsigned int& end, const unsigned int& size)
+{
+	for (unsigned int i = start; i < end; i++)
+	{
+		unit first = input_units[i], second;
+		vec2 current_position = first.position;
+		vec2 direction_first = first.direction;
+		vec2 sight_vec1_first, sight_vec2_first;
+		float angle_first = first.fov_deg / 2.f;
+
+		//поворачиваем на половину угла обзора первого юнита
 		//выделяя конус взора
-		std::thread r1(rotate, std::ref(direction), std::ref(sight_vec1), std::ref(angle));
-		std::thread r2(rotate, std::ref(direction), std::ref(sight_vec2), std::ref(angle) * -1);
+		rotateVector(direction_first, sight_vec1_first, angle_first);
+		rotateVector(direction_first, sight_vec2_first, -angle_first);
 
-		r1.join();
-		r2.join();
-
-		//вряд ли влияет
-		sight_vec1.x *= input_units[i].distance;
-		sight_vec2.x *= input_units[i].distance;
-		sight_vec1.y *= input_units[i].distance;
-		sight_vec2.y *= input_units[i].distance;
-
-
-		int res = 0;
-
-		for (std::size_t j = 0; j < input_size; j++)
+		for (unsigned int j = i + 1; j < size; j++)
 		{
-			vec2 checked_position = input_units[j].position;
+			second = input_units[j];
+			vec2 checked_position = second.position;
 
-			//может ли юнит увидеть другого на дистанции
-			if (i != j && check_distance_with_err(current_position, checked_position, input_units[i].distance))
+			//может ли первый юнит увидеть второго на дистанции
+			if (checkDistance(current_position, checked_position, first.distance))
 			{
 				float vm1, vm2;
-				std::thread v1(vm, std::ref(current_position), std::ref(sight_vec1), std::ref(checked_position), std::ref(vm1));
-				std::thread v2(vm, std::ref(current_position), std::ref(sight_vec2), std::ref(checked_position), std::ref(vm2));
-				v1.join();
-				v2.join();
+				vectorMultiply(current_position, sight_vec1_first, checked_position, vm1);
+				vectorMultiply(current_position, sight_vec2_first, checked_position, vm2);
+
 				//попадает ли юнит в сектор видимости круга
 				if (vm1 <= 0.f && vm2 >= 0.f)
 				{
-					res++;
+					mutex.lock();
+					result[i]++;
+					mutex.unlock();
+				}
+			}
+			//может ли второй юнит увидеть первого на дистанции
+			if (checkDistance(checked_position, current_position, second.distance))
+			{
+				vec2 direction_second = second.direction;
+				vec2 sight_vec1_second, sight_vec2_second;
+				float angle_second = second.fov_deg / 2.f;
+
+				float vm1, vm2;
+
+				rotateVector(direction_second, sight_vec1_second, angle_second);
+				rotateVector(direction_second, sight_vec2_second, -angle_second);
+
+				vectorMultiply(checked_position, sight_vec1_second, current_position, vm1);
+				vectorMultiply(checked_position, sight_vec2_second, current_position, vm2);
+
+				//попадает ли юнит в сектор видимости круга
+				if (vm1 <= 0.f && vm2 >= 0.f)
+				{
+					mutex.lock();
+					result[j]++;
+					mutex.unlock();
 				}
 			}
 		}
-		result.push_back(res);
 	}
 }
